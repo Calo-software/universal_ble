@@ -1,5 +1,13 @@
 # Universal BLE Agent Guidelines
 
+## Calo fork scope and validation
+
+This public fork is maintained for Calo's OnSight product. Keep fixes focused, retain upstream attribution and BSD-3-Clause notices, and preserve the README's issue and pull-request support expectations.
+
+For Windows BLE changes, build and test the final candidate locally with real Bluetooth hardware before declaring it ready to merge. Post evidence on the fork PR, recording the tested commit SHA, package and app versions, OS, adapter and sensor/logger models, steps, outcomes, failures and untested cases. Hardware checks must run locally; hardware-free CI checks are welcome. Missing or failing required physical checks block merge. Repeat relevant checks after changes that affect the tested candidate.
+
+Coordinate use of the shared local Flutter SDK and Bluetooth adapter with other OnSight work. Android and iOS implementation and hardware evaluation are deferred until the Windows results are reviewed. Keep raw device captures, review logs and screenshots outside Git, and avoid publishing nearby device identities or private OnSight code in this public repository.
+
 This repository provides a unified cross-platform Flutter BLE plugin (`universal_ble`) supporting Android, iOS, macOS, Windows, Linux, and Web.
 
 ## Device ID Format & Handling (Critical)

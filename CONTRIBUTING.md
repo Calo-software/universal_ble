@@ -1,5 +1,9 @@
 # Contributing
 
+## Calo fork maintenance
+
+This fork is maintained for Calo's OnSight product. We may not monitor or respond to issues or pull requests, and review or acceptance of external contributions is not guaranteed. The guidance below comes from upstream; it does not create a support commitment for this fork. Report an upstream issue only after reproducing it against upstream code.
+
 Thank you for helping improve Universal BLE. This document describes how we work in this repository and what we expect from contributions.
 
 ## Reporting issues

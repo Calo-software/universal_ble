@@ -1,5 +1,15 @@
 # Universal BLE
 
+## Calo fork for OnSight
+
+This is Calo's fork of [Navideck/universal_ble](https://github.com/Navideck/universal_ble), maintained for use with our OnSight product. We keep focused changes needed by OnSight and retain the upstream [BSD 3-Clause licence](LICENSE) and attribution.
+
+Maintenance follows OnSight's requirements. We may not monitor or respond to issues or pull requests, and we do not commit to reviewing, accepting or releasing external contributions. This fork is provided without a support commitment.
+
+The documentation and package badges below describe the upstream project. Fork-specific changes are recorded in [CHANGELOG.md](CHANGELOG.md); upstream platform support does not establish that a platform has been tested with OnSight.
+
+---
+
 <div align="center">
   <img src="assets/universal_ble_banner.jpg" alt="Universal BLE — Cross-platform Bluetooth Low Energy for Flutter" width="100%">
 </div>
