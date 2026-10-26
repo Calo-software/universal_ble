@@ -22,6 +22,7 @@
 #include "helper/utils.h"
 #include "ui_thread_handler.hpp"
 #include "universal_ble_thread_safe.h"
+#include "scan_result_merge.h"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -402,6 +403,7 @@ private:
   RadioState old_radio_state_ = RadioState::Unknown;
   BluetoothLEAdvertisementWatcher bluetooth_le_watcher_{nullptr};
   DeviceWatcher device_watcher_{nullptr};
+  std::mutex device_watcher_mutex_;
 
   std::unordered_map<uint64_t, std::shared_ptr<BluetoothDeviceAgent>>
       connected_devices_{};
@@ -410,12 +412,13 @@ private:
   uint64_t next_connect_generation_ = 0;
   std::mutex connected_devices_mutex_;
   ThreadSafeMap<std::string, DeviceInformation> device_watcher_devices_{};
-  ThreadSafeMap<std::string, UniversalBleScanResult> scan_results_{};
-  // Addresses Windows has already handed over as a *connectable* packet. A scan
-  // response arrives as its own, non-connectable event; this map tracks which
-  // addresses were heard as connectable so scan responses preserve their
-  // connectable state.
-  ThreadSafeMap<std::string, bool> connectable_heard_{};
+  ThreadSafeMap<std::string, ScanResultMergeState<UniversalBleScanResult>>
+      scan_results_{};
+  std::mutex scan_results_mutex_;
+  // Captured by native callbacks and queued UI reports. Invalidated before
+  // clearing the cache so a stopped session cannot populate a later one.
+  std::shared_ptr<std::atomic<bool>> scan_session_ =
+      std::make_shared<std::atomic<bool>>(false);
   // Maps DeviceInformation.Id() -> MAC address string used as key in
   // device_watcher_devices_
   ThreadSafeMap<std::string, std::string> device_watcher_id_to_mac_{};
@@ -468,13 +471,17 @@ private:
 
   void RadioStateChanged(const Radio &sender, const IInspectable &);
   void SetupDeviceWatcher();
-  void DisposeDeviceWatcher();
-  void PushUniversalScanResult(UniversalBleScanResult scan_result,
-                               bool is_connectable, bool is_scan_response);
+  void DisposeDeviceWatcher(
+      const std::shared_ptr<std::atomic<bool>> &expected_session = nullptr);
+  void PushUniversalScanResult(
+      UniversalBleScanResult scan_result, bool is_connectable,
+      bool is_scan_response, const std::shared_ptr<std::atomic<bool>> &session);
   void BluetoothLeWatcherReceived(
       const BluetoothLEAdvertisementWatcher &sender,
-      const BluetoothLEAdvertisementReceivedEventArgs &args);
-  void OnDeviceInfoReceived(const DeviceInformation &device_info);
+      const BluetoothLEAdvertisementReceivedEventArgs &args,
+      const std::shared_ptr<std::atomic<bool>> &session);
+  void OnDeviceInfoReceived(const DeviceInformation &device_info,
+                            const std::shared_ptr<std::atomic<bool>> &session);
   void BluetoothLeDeviceConnectionStatusChanged(const BluetoothLEDevice &sender,
                                                 const IInspectable &args);
   void BluetoothLeDeviceGattServicesChanged(const BluetoothLEDevice &sender,

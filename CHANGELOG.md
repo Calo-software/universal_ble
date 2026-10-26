@@ -1,3 +1,6 @@
+## Unreleased
+* Windows: deliver repeated advertisements when `skipDuplicates` is `false`, including identical readings and changed RSSI, manufacturer data or service data. Use WinRT reception timestamps. Keep `skipDuplicates: true` as one result per device per scan in Dart. Device metadata updates no longer replay cached sensor payloads. Scan responses can inherit payload only once from the preceding advertisement within one second; sparse ordinary advertisements no longer inherit old payloads. Stopped scan callbacks cannot populate or deliver into a restarted scan.
+
 ## 3.1.2
 * Windows: Service Data advertised under a 128-bit UUID is reported under that UUID, and `ScanFilter.withServiceData` matches it. The 16 UUID bytes are little-endian on air but were read in the order they arrive, so `BleDevice.serviceData` used a byte-reversed key and a filter with the real UUID found nothing (#356).
 

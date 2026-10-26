@@ -293,9 +293,17 @@ std::optional<FlutterError> UniversalBlePlugin::StartScan(
   }
 
   try {
+    if (bluetooth_le_watcher_) {
+      if (auto error = StopScan()) {
+        return error;
+      }
+    }
+    {
+      std::lock_guard lock(scan_results_mutex_);
+      scan_results_.clear();
+      scan_session_ = std::make_shared<std::atomic<bool>>(true);
+    }
     SetupDeviceWatcher();
-    scan_results_.clear();
-    connectable_heard_.clear();
     const DeviceWatcherStatus device_watcher_status = device_watcher_.Status();
     // std::cout << "DeviceWatcherState: " <<
     // DeviceWatcherStatusToString(deviceWatcherStatus) << std::endl;
@@ -334,12 +342,14 @@ std::optional<FlutterError> UniversalBlePlugin::StartScan(
       }
 
       const auto callback_operations = callback_operations_;
+      const auto session = scan_session_;
       bluetooth_le_watcher_received_token_ = bluetooth_le_watcher_.Received(
-          [this, callback_operations](const auto &sender, const auto &args) {
+          [this, callback_operations, session](const auto &sender,
+                                               const auto &args) {
             const auto callback = callback_operations.TryAcquire();
-            if (!callback.has_value())
+            if (!callback.has_value() || !session->load())
               return;
-            BluetoothLeWatcherReceived(sender, args);
+            BluetoothLeWatcherReceived(sender, args, session);
           });
     }
     bluetooth_le_watcher_.Start();
@@ -361,6 +371,7 @@ std::optional<FlutterError> UniversalBlePlugin::StartScan(
 };
 
 std::optional<FlutterError> UniversalBlePlugin::StopScan() {
+  scan_session_->store(false);
   try {
     if (bluetooth_le_watcher_) {
       try {
@@ -376,8 +387,10 @@ std::optional<FlutterError> UniversalBlePlugin::StopScan() {
     }
     bluetooth_le_watcher_ = nullptr;
     DisposeDeviceWatcher();
-    scan_results_.clear();
-    connectable_heard_.clear();
+    {
+      std::lock_guard lock(scan_results_mutex_);
+      scan_results_.clear();
+    }
     return std::nullopt;
   } catch (const hresult_error &err) {
     const int error_code = err.code();
@@ -1342,118 +1355,34 @@ void UniversalBlePlugin::PairingRequestedHandler(
   event_args.Accept(pin);
 }
 
-// Send device to callback channel
-// if device is already discovered in deviceWatcher then merge the scan result
-//
-// A scan response is not a stray broadcast: it is the answer to the scan
-// request the host itself sent, and it belongs to a device that has just
-// advertised. A peripheral may publish part of its data there - a 128-bit
-// service UUID that no longer fits in the advertisement next to its name, for
-// instance - and Windows reports that packet with `IsConnectable == false`, so
-// this gate used to drop it. The caller then never saw the service, while
-// Android, BlueZ, CoreBluetooth and bleak all merge the two packets of a
-// device into one result.
+// Only radio packets produce scan observations. Metadata updates are cached
+// separately; they must not replay an old sensor payload with a new timestamp.
 void UniversalBlePlugin::PushUniversalScanResult(
     UniversalBleScanResult scan_result, const bool is_connectable,
-    const bool is_scan_response) {
-  if (is_connectable) {
-    connectable_heard_.insert_or_assign(scan_result.device_id(), true);
+    const bool is_scan_response,
+    const std::shared_ptr<std::atomic<bool>> &session) {
+  std::lock_guard lock(scan_results_mutex_);
+  if (!session->load()) {
+    return;
   }
+  auto state = scan_results_.get(scan_result.device_id())
+                   .value_or(ScanResultMergeState<UniversalBleScanResult>{});
+  scan_result = state.Observe(scan_result, is_connectable, is_scan_response);
+  scan_results_.insert_or_assign(scan_result.device_id(), state);
 
-  // Presence is derived from emptiness, not nullness: the advertisement
-  // watcher sets `services` unconditionally, so an empty non-null list means
-  // "carries nothing" just like a null one.
-  auto has_items = [](const auto *value) {
-    return value != nullptr && !value->empty();
-  };
-  ScanFieldPresence incoming;
-  incoming.name = scan_result.name() != nullptr && !scan_result.name()->empty();
-  incoming.is_paired = scan_result.is_paired() != nullptr;
-  incoming.manufacturer_data = has_items(scan_result.manufacturer_data_list());
-  incoming.services = has_items(scan_result.services());
-  incoming.service_data = has_items(scan_result.service_data());
-
-  const std::optional<UniversalBleScanResult> it =
-      scan_results_.get(scan_result.device_id());
-  const bool address_heard_connectable =
-      connectable_heard_.get(scan_result.device_id()).value_or(false) ||
-      (it.has_value() && it.value().connectable() != nullptr &&
-       *it.value().connectable());
-  const bool device_is_connectable = DeriveConnectableState(
-      is_connectable, is_scan_response, address_heard_connectable);
-  scan_result.set_connectable(device_is_connectable);
-
-  if (it.has_value()) {
-    const UniversalBleScanResult &current_scan_result = it.value();
-
-    // Check if current scanResult name is longer than the received scanResult
-    // name
-    if (incoming.name && current_scan_result.name() != nullptr &&
-        !current_scan_result.name()->empty() &&
-        current_scan_result.name()->size() > scan_result.name()->size()) {
-      scan_result.set_name(*current_scan_result.name());
-    }
-
-    ScanFieldPresence cached;
-    cached.name = current_scan_result.name() != nullptr &&
-                  !current_scan_result.name()->empty();
-    cached.is_paired = current_scan_result.is_paired() != nullptr;
-    // A cached list that is null *or* empty counts as absent, the same rule the
-    // incoming packet uses above: copying an empty list over a packet that
-    // carries nothing is not a reason to deliver.
-    cached.manufacturer_data =
-        has_items(current_scan_result.manufacturer_data_list());
-    cached.services = has_items(current_scan_result.services());
-    cached.service_data = has_items(current_scan_result.service_data());
-
-    // Backfill cached fields the incoming packet does not carry, so a sparse
-    // scan response cannot evict data the advertisement already supplied.
-    const ScanBackfillPlan plan = PlanScanBackfill(incoming, cached);
-    if (plan.name) {
-      scan_result.set_name(*current_scan_result.name());
-    }
-    if (plan.is_paired) {
-      scan_result.set_is_paired(current_scan_result.is_paired());
-    }
-    if (plan.manufacturer_data) {
-      scan_result.set_manufacturer_data_list(
-          current_scan_result.manufacturer_data_list());
-    }
-    if (plan.services) {
-      scan_result.set_services(current_scan_result.services());
-    }
-    if (plan.service_data) {
-      scan_result.set_service_data(current_scan_result.service_data());
-    }
-
-    // A changed connectable state is an update in itself: a device whose
-    // connectability state changes must reach the caller, even when the packet
-    // carries nothing else new.
-    const bool connectable_changed =
-        current_scan_result.connectable() == nullptr ||
-        *scan_result.connectable() != *current_scan_result.connectable();
-
-    // if nothing to update then return
-    if (!ShouldUpdateScanResult(plan, is_scan_response, connectable_changed)) {
-      return;
-    }
-  }
-
-  // Update cache
-  scan_results_.insert_or_assign(scan_result.device_id(), scan_result);
-
-  // Filter final result before sending to Flutter
+  // Filter after metadata and complementary scan-response fields are merged.
   if (filterDevice(scan_result)) {
-    const auto timestamp_microseconds = GetCurrentTimestampMicros();
-    scan_result.set_timestamp(timestamp_microseconds / 1000);
-    scan_result.set_timestamp_microseconds(timestamp_microseconds);
-    PostCentralReport([scan_result](UniversalBleCallbackChannel *channel) {
-      channel->OnScanResult(scan_result, SuccessCallback, ErrorCallback);
-    });
+    PostCentralReport(
+        [scan_result, session](UniversalBleCallbackChannel *channel) {
+          if (session->load()) {
+            channel->OnScanResult(scan_result, SuccessCallback, ErrorCallback);
+          }
+        });
   }
 }
 
 void UniversalBlePlugin::SetupDeviceWatcher() {
+  std::lock_guard lock(device_watcher_mutex_);
   if (device_watcher_ != nullptr)
     return;
 
@@ -1472,11 +1401,15 @@ void UniversalBlePlugin::SetupDeviceWatcher() {
 
   /// Device Added from DeviceWatcher
   const auto callback_operations = callback_operations_;
+  const auto session = scan_session_;
   device_watcher_added_token_ = device_watcher_.Added(
-      [this, callback_operations](DeviceWatcher sender,
-                                  const DeviceInformation &device_info) {
+      [this, callback_operations, session](
+          DeviceWatcher sender, const DeviceInformation &device_info) {
         const auto callback = callback_operations.TryAcquire();
         if (!callback.has_value())
+          return;
+        std::lock_guard lock(device_watcher_mutex_);
+        if (!session->load())
           return;
         try {
           const auto properties = device_info.Properties();
@@ -1496,7 +1429,7 @@ void UniversalBlePlugin::SetupDeviceWatcher() {
           device_watcher_id_to_mac_.insert_or_assign(device_info_id,
                                                      device_address);
           device_watcher_devices_.insert_or_assign(device_address, device_info);
-          OnDeviceInfoReceived(device_info);
+          OnDeviceInfoReceived(device_info, session);
         } catch (const std::exception &ex) {
           log_and_swallow("DeviceWatcher.Added std::exception", ex);
         } catch (...) {
@@ -1506,11 +1439,14 @@ void UniversalBlePlugin::SetupDeviceWatcher() {
 
   // Update only if device is already discovered in deviceWatcher.Added
   device_watcher_updated_token_ = device_watcher_.Updated(
-      [this, callback_operations](
+      [this, callback_operations, session](
           DeviceWatcher sender,
           const DeviceInformationUpdate &device_info_update) {
         const auto callback = callback_operations.TryAcquire();
         if (!callback.has_value())
+          return;
+        std::lock_guard lock(device_watcher_mutex_);
+        if (!session->load())
           return;
         try {
           const std::string device_info_id = to_string(device_info_update.Id());
@@ -1525,7 +1461,7 @@ void UniversalBlePlugin::SetupDeviceWatcher() {
             const auto value = it.value();
             value.Update(device_info_update);
             device_watcher_devices_.insert_or_assign(mac_key, value);
-            OnDeviceInfoReceived(value);
+            OnDeviceInfoReceived(value, session);
           }
         } catch (const std::exception &ex) {
           log_and_swallow("DeviceWatcher.Updated std::exception", ex);
@@ -1535,10 +1471,13 @@ void UniversalBlePlugin::SetupDeviceWatcher() {
       });
 
   device_watcher_removed_token_ = device_watcher_.Removed(
-      [this, callback_operations](DeviceWatcher sender,
-                                  const DeviceInformationUpdate &args) {
+      [this, callback_operations, session](
+          DeviceWatcher sender, const DeviceInformationUpdate &args) {
         const auto callback = callback_operations.TryAcquire();
         if (!callback.has_value())
+          return;
+        std::lock_guard lock(device_watcher_mutex_);
+        if (!session->load())
           return;
         try {
           const std::string device_id = to_string(args.Id());
@@ -1557,18 +1496,20 @@ void UniversalBlePlugin::SetupDeviceWatcher() {
 
   device_watcher_enumeration_completed_token_ =
       device_watcher_.EnumerationCompleted(
-          [this, callback_operations](DeviceWatcher sender, IInspectable args) {
+          [this, callback_operations, session](DeviceWatcher sender,
+                                               IInspectable args) {
             const auto callback = callback_operations.TryAcquire();
             if (!callback.has_value())
               return;
             UniversalBleLogger::LogInfo(
                 "DeviceWatcherEvent: EnumerationCompleted");
-            DisposeDeviceWatcher();
+            DisposeDeviceWatcher(session);
             // EnumerationCompleted
           });
 
-  device_watcher_stopped_token_ = device_watcher_.Stopped(
-      [this, callback_operations](DeviceWatcher sender, IInspectable args) {
+  device_watcher_stopped_token_ =
+      device_watcher_.Stopped([this, callback_operations, session](
+                                  DeviceWatcher sender, IInspectable args) {
         const auto callback = callback_operations.TryAcquire();
         if (!callback.has_value())
           return;
@@ -1578,7 +1519,13 @@ void UniversalBlePlugin::SetupDeviceWatcher() {
       });
 }
 
-void UniversalBlePlugin::DisposeDeviceWatcher() {
+void UniversalBlePlugin::DisposeDeviceWatcher(
+    const std::shared_ptr<std::atomic<bool>> &expected_session) {
+  std::lock_guard lock(device_watcher_mutex_);
+  // A completion from an old watcher must not dispose a replacement watcher.
+  if (expected_session && !expected_session->load()) {
+    return;
+  }
   const auto watcher = device_watcher_;
   device_watcher_ = nullptr;
   if (watcher != nullptr) {
@@ -1620,7 +1567,8 @@ void UniversalBlePlugin::DisposeDeviceWatcher() {
 }
 
 void UniversalBlePlugin::OnDeviceInfoReceived(
-    const DeviceInformation &device_info) {
+    const DeviceInformation &device_info,
+    const std::shared_ptr<std::atomic<bool>> &session) {
   const auto properties = device_info.Properties();
 
   // Avoid devices if deviceAddressKey is not present
@@ -1637,53 +1585,27 @@ void UniversalBlePlugin::OnDeviceInfoReceived(
   const std::string device_address =
       to_string(bluetooth_address_property_value.GetString());
 
-  // Update device info if already discovered in advertisementWatcher
-  const auto it = scan_results_.get(device_address);
-  if (it.has_value()) {
-    bool is_connectable = it.value().connectable() != nullptr
-                              ? *it.value().connectable()
-                              : true;
-    if (properties.HasKey(is_connectable_key)) {
-      const auto is_connectable_property_value = lookup_i_property_value(
-          properties, is_connectable_key, "IsConnectable", "OnDeviceInfoReceived");
-      if (is_connectable_property_value) {
-        is_connectable = is_connectable_property_value.GetBoolean();
-      }
+  // DeviceWatcher reports OS metadata, not a new over-the-air reading.
+  // Keep it for subsequent packets without emitting or changing telemetry/time.
+  std::lock_guard lock(scan_results_mutex_);
+  if (!session->load()) {
+    return;
+  }
+  auto state = scan_results_.get(device_address);
+  if (state && state->latest) {
+    state->latest->set_is_paired(device_info.Pairing().IsPaired());
+    if (!device_info.Name().empty()) {
+      state->latest->set_name(to_string(device_info.Name()));
     }
-    bool is_paired = device_info.Pairing().IsPaired();
-    if (properties.HasKey(is_paired_key)) {
-      const auto is_paired_property_value = lookup_i_property_value(
-          properties, is_paired_key, "IsPaired", "OnDeviceInfoReceived");
-      if (is_paired_property_value) {
-        is_paired = is_paired_property_value.GetBoolean();
-      }
-    }
-
-    UniversalBleScanResult universal_scan_result(device_address);
-    universal_scan_result.set_is_paired(is_paired);
-    universal_scan_result.set_connectable(is_connectable);
-
-    if (!device_info.Name().empty())
-      universal_scan_result.set_name(to_string(device_info.Name()));
-
-    if (properties.HasKey(signal_strength_key)) {
-      const auto rssi_property_value =
-          lookup_i_property_value(properties, signal_strength_key,
-                                  "SignalStrength", "OnDeviceInfoReceived");
-      if (rssi_property_value) {
-        const int16_t rssi = rssi_property_value.GetInt16();
-        universal_scan_result.set_rssi(rssi);
-      }
-    }
-
-    PushUniversalScanResult(universal_scan_result, is_connectable, false);
+    scan_results_.insert_or_assign(device_address, *state);
   }
 }
 
 /// Advertisement received from advertisementWatcher
 void UniversalBlePlugin::BluetoothLeWatcherReceived(
     const BluetoothLEAdvertisementWatcher &,
-    const BluetoothLEAdvertisementReceivedEventArgs &args) {
+    const BluetoothLEAdvertisementReceivedEventArgs &args,
+    const std::shared_ptr<std::atomic<bool>> &session) {
   try {
     auto device_id = mac_address_to_str(args.BluetoothAddress());
     auto universal_scan_result = UniversalBleScanResult(device_id);
@@ -1781,6 +1703,13 @@ void UniversalBlePlugin::BluetoothLeWatcherReceived(
     }
 
     universal_scan_result.set_rssi(args.RawSignalStrengthInDBm());
+    // WinRT timestamps reception, before parsing, filtering or UI delivery.
+    const auto timestamp_microseconds =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            winrt::clock::to_sys(args.Timestamp()).time_since_epoch())
+            .count();
+    universal_scan_result.set_timestamp(timestamp_microseconds / 1000);
+    universal_scan_result.set_timestamp_microseconds(timestamp_microseconds);
 
     // Add services
     auto services = flutter::EncodableList();
@@ -1833,7 +1762,7 @@ void UniversalBlePlugin::BluetoothLeWatcherReceived(
     }
     // Filter Device
     PushUniversalScanResult(universal_scan_result, args.IsConnectable(),
-                            is_scan_response);
+                            is_scan_response, session);
   } catch (...) {
     UniversalBleLogger::LogError("ScanResultErrorInParsing");
   }
@@ -2618,6 +2547,7 @@ void UniversalBlePlugin::DisposeGattMap(
  * rid of any dangling connections, before scanning or connecting.
  */
 void UniversalBlePlugin::ResetState() {
+  scan_session_->store(false);
   try {
     // Stop and detach advertisement watcher
     if (bluetooth_le_watcher_ != nullptr) {
@@ -2637,8 +2567,10 @@ void UniversalBlePlugin::ResetState() {
 
     // Dispose device watcher and caches
     DisposeDeviceWatcher();
-    scan_results_.clear();
-    connectable_heard_.clear();
+    {
+      std::lock_guard lock(scan_results_mutex_);
+      scan_results_.clear();
+    }
     device_watcher_devices_.clear();
     device_watcher_id_to_mac_.clear();
 
