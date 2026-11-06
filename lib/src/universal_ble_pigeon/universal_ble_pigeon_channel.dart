@@ -396,6 +396,9 @@ extension UniversalBleScanResultExtension on UniversalBleScanResult {
       services: services ?? [],
       timestamp: timestamp,
       timestampMicroseconds: timestampMicroseconds,
+      nativeTimestampNanos: nativeTimestampNanos,
+      nativeCallbackElapsedRealtimeNanos: nativeCallbackElapsedRealtimeNanos,
+      nativeCallbackTimeMillis: nativeCallbackTimeMillis,
       manufacturerDataList: manufacturerDataList
               ?.map((e) => ManufacturerData(e.companyIdentifier, e.data))
               .toList() ??

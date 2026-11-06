@@ -20,11 +20,10 @@ class ScanFilter {
   ///
   /// The matching Service Data bytes are reported in [BleDevice.serviceData].
   ///
-  /// Platform notes: on `Android` and `Apple` this switches the scan to the
-  /// software filter path — the advertisement packets cannot be filtered by the
-  /// platform (a controller-level scan filter or `withServices` would discard
-  /// the device before the plugin sees it), so more advertisements reach the app
-  /// process at some battery cost. Unsupported on Web, which throws
+  /// Android uses native Service Data presence filters, alongside other native
+  /// OR alternatives. On Apple this switches to software filtering because
+  /// `withServices` cannot match a UUID present only inside Service Data, so
+  /// more advertisements reach the app process. Unsupported on Web, which throws
   /// `notSupported`; scan without a service filter there and read
   /// [BleDevice.serviceData] from the advertisement events instead.
   List<String> withServiceData;

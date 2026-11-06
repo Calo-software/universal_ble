@@ -15,6 +15,17 @@ class BleDevice {
   bool? paired;
   int? timestamp;
   int? timestampMicroseconds;
+
+  /// Android packet reception on the elapsed-realtime nanosecond clock.
+  /// Null on platforms that do not supply this clock.
+  int? nativeTimestampNanos;
+
+  /// Android elapsed-realtime nanoseconds when the native callback ran.
+  int? nativeCallbackElapsedRealtimeNanos;
+
+  /// Android epoch milliseconds when the native callback ran.
+  int? nativeCallbackTimeMillis;
+
   /// Whether the device is connectable based on its advertising flags.
   ///
   /// Can be `null` if the platform or advertising packet does not indicate
@@ -73,6 +84,9 @@ class BleDevice {
     Map<String, Uint8List> serviceData = const {},
     this.timestamp,
     this.timestampMicroseconds,
+    this.nativeTimestampNanos,
+    this.nativeCallbackElapsedRealtimeNanos,
+    this.nativeCallbackTimeMillis,
     this.connectable,
   })  : services = _validateServices(services),
         serviceData = _validateServiceData(serviceData),
@@ -95,6 +109,9 @@ class BleDevice {
         serviceData: serviceData,
         timestamp: timestamp,
         timestampMicroseconds: timestampMicroseconds,
+        nativeTimestampNanos: nativeTimestampNanos,
+        nativeCallbackElapsedRealtimeNanos: nativeCallbackElapsedRealtimeNanos,
+        nativeCallbackTimeMillis: nativeCallbackTimeMillis,
         connectable: connectable,
       );
 

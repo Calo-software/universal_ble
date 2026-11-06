@@ -86,8 +86,8 @@ internal class UniversalBleFilterUtilTest {
     fun usesCustomFiltersOnlyWhenNativeFilterCannotExpressIt() {
         // Advertised services are still handled by the controller-level ScanFilter.
         assertFalse(scanFilter(withServices = listOf("181a")).usesCustomFilters())
-        // Name prefix and Service Data cannot be, so they are applied in the callback.
-        assertTrue(scanFilter(withServiceData = listOf("181a")).usesCustomFilters())
+        // Service Data uses its own native AD-field presence filter.
+        assertFalse(scanFilter(withServiceData = listOf("181a")).usesCustomFilters())
         assertTrue(scanFilter(withNamePrefix = listOf("ATC")).usesCustomFilters())
     }
 }

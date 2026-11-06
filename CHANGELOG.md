@@ -1,4 +1,6 @@
 ## Unreleased
+* Android: retain native Service Data presence filters, including when combined with service UUID and manufacturer filters, so filtered scans stay native while the screen is off. Name-prefix filters still use software filtering.
+* Preserve Android scan reception and callback clocks through native delivery, public scan results and copies. Fields are nullable on other platforms; this does not alter packet payloads or timestamps.
 * Windows: deliver repeated advertisements when `skipDuplicates` is `false`, including identical readings and changed RSSI, manufacturer data or service data. Use WinRT reception timestamps. Keep `skipDuplicates: true` as one result per device per scan in Dart. Device metadata updates no longer replay cached sensor payloads. Scan responses can inherit payload only once from the preceding advertisement within one second; sparse ordinary advertisements no longer inherit old payloads. Stopped scan callbacks cannot populate or deliver into a restarted scan.
 
 ## 3.1.2
@@ -363,3 +365,4 @@
 
 ## 0.8.0
 * Initial release
+
