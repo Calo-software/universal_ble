@@ -1649,6 +1649,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         }
 
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val callbackElapsedNanos = SystemClock.elapsedRealtimeNanos()
+            val callbackTimeMillis = System.currentTimeMillis()
 
             // UniversalBleLogger.logVerbose("onScanResult: $result")
             var serviceUuids: Array<UUID> = arrayOf()
@@ -1667,8 +1669,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             // ScanResult.timestampNanos is captured by Android at packet
             // reception. Convert that monotonic value to epoch microseconds
             // before posting to Flutter so main-thread delay is excluded.
-            val timestampMicroseconds = System.currentTimeMillis() * 1000 -
-                (SystemClock.elapsedRealtimeNanos() - result.timestampNanos) / 1000
+            val timestampMicroseconds = callbackTimeMillis * 1000 -
+                (callbackElapsedNanos - result.timestampNanos) / 1000
 
             if (!universalBleFilterUtil.filterDevice(
                     name,
@@ -1691,6 +1693,9 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                         services = serviceUuids.map { it.toString() }.toList(),
                         timestamp = timestampMicroseconds / 1000,
                         timestampMicroseconds = timestampMicroseconds,
+                        nativeTimestampNanos = result.timestampNanos,
+                        nativeCallbackElapsedRealtimeNanos = callbackElapsedNanos,
+                        nativeCallbackTimeMillis = callbackTimeMillis,
                         connectable = result.isConnectable
                     )
                 ) {}

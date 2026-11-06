@@ -115,13 +115,9 @@ class UniversalBleFilterUtil {
 }
 
 fun UniversalScanFilter.usesCustomFilters(): Boolean {
-    // NamePrefix filtering is not supported in native filters. Service Data
-    // matching cannot be expressed as a native ScanFilter either: the controller
-    // would drop a device that carries the UUID only inside its Service Data
-    // before the app is ever notified, so both have to be applied in the scan
-    // callback instead. Callers that opt in pay for it in battery (every
-    // advertisement reaches the app process before being filtered).
-    return withNamePrefix.isNotEmpty() || withServiceData.isNotEmpty()
+    // Prefix matching cannot be expressed natively. Service Data presence can:
+    // setServiceData(uuid, empty bytes) matches its AD field, not service UUIDs.
+    return withNamePrefix.isNotEmpty()
 }
 
 // Convert UniversalScanFilter to ScanFilter
@@ -145,6 +141,15 @@ fun UniversalScanFilter.toScanFilters(serviceUuids: List<UUID>): List<ScanFilter
                 e.toString()
             )
         }
+    }
+
+    // Each entry is an OR alternative, including Service Data-only beacons.
+    for (serviceData in withServiceData) {
+        scanFilters.add(
+            ScanFilter.Builder()
+                .setServiceData(ParcelUuid(UUID.fromString(serviceData)), ByteArray(0))
+                .build()
+        )
     }
 
     // Add ManufacturerData Filter

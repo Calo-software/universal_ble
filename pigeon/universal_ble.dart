@@ -31,6 +31,10 @@ class UniversalBleScanResult {
   final int? timestamp;
   final int? timestampMicroseconds;
   final bool? connectable;
+  // Android boot-clock reception and callback clocks, absent elsewhere.
+  final int? nativeTimestampNanos;
+  final int? nativeCallbackElapsedRealtimeNanos;
+  final int? nativeCallbackTimeMillis;
 
   UniversalBleScanResult({
     required this.name,
@@ -43,6 +47,9 @@ class UniversalBleScanResult {
     required this.timestamp,
     required this.timestampMicroseconds,
     required this.connectable,
+    this.nativeTimestampNanos,
+    this.nativeCallbackElapsedRealtimeNanos,
+    this.nativeCallbackTimeMillis,
   });
 }
 
